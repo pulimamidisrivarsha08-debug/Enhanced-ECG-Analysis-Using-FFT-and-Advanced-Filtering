@@ -1,0 +1,126 @@
+%% Enhanced ECG Signal Processing with FFT + IFFT + LMS Adaptive Filtering
+% Final clean version – no 3D spectrogram
+
+clc; clear; close all;
+
+%% === Step 1: Generate Synthetic ECG Signal ===
+fs = 500;                 % Sampling frequency (Hz)
+duration = 10;            % seconds
+t = 0:1/fs:duration;
+t = t(1:end-1);
+
+% ECG-like waveform (P-QRS-T pattern)
+hr = 75; f_ecg = hr/60;
+ecg_clean = 1.2*sawtooth(2*pi*f_ecg*t, 0.25) + 0.2*sin(2*pi*2*f_ecg*t);
+ecg_clean = ecg_clean / max(abs(ecg_clean));
+
+figure;
+plot(t, ecg_clean, 'b');
+title('Step 1: Original ECG Signal');
+xlabel('Time (s)'); ylabel('Amplitude'); grid on;
+
+%% === Step 2: Add Gaussian Noise ===
+noise_power = 0.05;
+noise = sqrt(noise_power)*randn(size(ecg_clean));
+ecg_noisy = ecg_clean + noise;
+
+figure;
+plot(t, ecg_noisy, 'r');
+title('Step 2: Noisy ECG Signal');
+xlabel('Time (s)'); ylabel('Amplitude'); grid on;
+
+%% === Step 3: Frequency Spectrum using FFT ===
+N = length(ecg_noisy);
+f_axis = (0:N-1)*(fs/N);
+X_clean = fft(ecg_clean);
+X_noisy = fft(ecg_noisy);
+
+figure;
+subplot(2,1,1);
+plot(f_axis(1:floor(N/2)), abs(X_clean(1:floor(N/2)))/N, 'b');
+title('Step 3a: FFT of Clean ECG');
+xlabel('Frequency (Hz)'); ylabel('|X(f)|'); grid on;
+
+subplot(2,1,2);
+plot(f_axis(1:floor(N/2)), abs(X_noisy(1:floor(N/2)))/N, 'r');
+title('Step 3b: FFT of Noisy ECG');
+xlabel('Frequency (Hz)'); ylabel('|Xn(f)|'); grid on;
+
+%% === Step 4: FFT + IFFT Band-Limited Filtering ===
+cutoff = 40;  % low-pass cutoff
+Y = X_noisy;
+Y(f_axis > cutoff & f_axis < (fs - cutoff)) = 0;
+ecg_ifft = real(ifft(Y));
+
+figure;
+plot(t, ecg_ifft, 'm');
+title('Step 4: After FFT + IFFT Filtering');
+xlabel('Time (s)'); ylabel('Amplitude'); grid on;
+
+%% === Step 5: LMS Adaptive Filtering ===
+mu = 0.001;  % Step size
+M = 16;      % Filter order
+ref_noise = sqrt(noise_power)*randn(size(ecg_noisy)); % reference input
+lms = dsp.LMSFilter('Length',M,'StepSize',mu);
+[ecg_lms, ~] = lms(ref_noise', ecg_ifft');
+ecg_lms = ecg_lms(:);  % ensure column vector
+
+% === Fix: Ensure all vectors same length/orientation ===
+L = min([length(ecg_clean), length(ecg_noisy), length(ecg_lms)]);
+ecg_clean = ecg_clean(1:L)'; 
+ecg_noisy = ecg_noisy(1:L)'; 
+ecg_ifft  = ecg_ifft(1:L)'; 
+ecg_lms   = ecg_lms(1:L);
+t = t(1:L);
+
+figure;
+plot(t, ecg_lms, 'g');
+title('Step 5: LMS Filter Output (Denoised ECG)');
+xlabel('Time (s)'); ylabel('Amplitude'); grid on;
+
+%% === Step 6: Stepwise Comparison ===
+figure;
+plot(t, ecg_clean, 'b','LineWidth',1.2); hold on;
+plot(t, ecg_noisy, 'r');
+plot(t, ecg_ifft, 'm');
+plot(t, ecg_lms, 'g');
+legend('Original ECG','Noisy ECG','FFT+IFFT ECG','LMS Denoised ECG');
+title('Step 6: Stepwise ECG Comparison');
+xlabel('Time (s)'); ylabel('Amplitude'); grid on;
+
+%% === Step 7: R-Peak Detection ===
+[~,locs_R] = findpeaks(ecg_lms,'MinPeakHeight',0.5*max(ecg_lms), ...
+                       'MinPeakDistance',round(0.25*fs));
+R_times = t(locs_R);
+num_R = numel(locs_R);
+HR = 60./diff(R_times);
+HR_mean = mean(HR);
+HRV = std(HR);
+
+figure;
+plot(t, ecg_lms, 'k'); hold on;
+plot(R_times, ecg_lms(locs_R), 'ro','MarkerFaceColor','r');
+title('Step 7: R-Peak Detection on Denoised ECG');
+xlabel('Time (s)'); ylabel('Amplitude'); grid on;
+legend('Denoised ECG','R-Peaks');
+
+%% === Step 8: Performance Metrics (Normalized) ===
+ecg_clean = ecg_clean / max(abs(ecg_clean));
+ecg_noisy = ecg_noisy / max(abs(ecg_noisy));
+ecg_lms   = ecg_lms   / max(abs(ecg_lms));
+
+mse_before = mean((ecg_clean - ecg_noisy).^2);
+mse_after  = mean((ecg_clean - ecg_lms).^2);
+
+snr_before = 10*log10(sum(ecg_clean.^2) / sum((ecg_noisy - ecg_clean).^2));
+snr_after  = 10*log10(sum(ecg_clean.^2) / sum((ecg_lms - ecg_clean).^2));
+
+fprintf('\n=========== ECG SIGNAL PERFORMANCE ===========\n');
+fprintf('Sampling Frequency       : %d Hz\n', fs);
+fprintf('Detected R-peaks         : %d\n', num_R);
+fprintf('Average Heart Rate (BPM) : %.2f\n', HR_mean);
+fprintf('Heart Rate Variability   : %.2f bpm\n', HRV);
+fprintf('SNR Before Filtering     : %.2f dB\n', snr_before);
+fprintf('SNR After Filtering      : %.2f dB\n', snr_after);
+fprintf('MSE Before Filtering     : %.6f\n', mse_before);
+fprintf('MSE After Filtering      : %.6f\n', mse_after);
